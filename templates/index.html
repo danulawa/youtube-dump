@@ -4,9 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>The YouTube Dump</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Manrope:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 </head>
 <body>
@@ -14,7 +11,6 @@
     <header class="head">
       <div class="dot"></div>
       <h1>The YouTube Dump</h1>
-      <span class="tag">stream &middot; no files kept</span>
     </header>
 
     <!-- Step 1: link -->
@@ -73,6 +69,18 @@
       <select id="quality" class="select"></select>
 
       <button id="downloadBtn" class="btn primary full">Download</button>
+
+      <!-- progress -->
+      <div id="progress" class="progress" hidden>
+        <div class="progress-track"><div id="progressFill" class="progress-fill"></div></div>
+        <div class="progress-meta">
+          <span id="progressStage">Starting&hellip;</span>
+          <span id="progressPct">0%</span>
+        </div>
+      </div>
+
+      <p id="doneMsg" class="done-msg" hidden>Saved! Check Your Downloads Folder.</p>
+      
       <p class="hint">Sizes are estimates. Above 1080p re-encodes (slower).</p>
     </section>
   </main>

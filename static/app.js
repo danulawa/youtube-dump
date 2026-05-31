@@ -3,7 +3,8 @@ const state = { duration: 0, qualities: [] };
 
 /* remembered trim selection (survives a Full <-> Trim round trip for 5 min) */
 const TRIM_MEMORY_MS = 5 * 60 * 1000;
-let trimMemory = null;   // { start, end, savedAt } or null
+let trimMemory = null;
+let pollTimer = null;
 
 /* ---------- time helpers ---------- */
 function hmsToSeconds(v) {
@@ -79,7 +80,6 @@ function flashTip(target, msg) {
   clearTimeout(flashTimers[target]);
   flashTimers[target] = setTimeout(() => validateTimes(), 1400);
 }
-
 function endLimitMsg() {
   return `Can't go past the video end (${secondsToHms(state.duration)})`;
 }
@@ -156,6 +156,7 @@ async function fetchInfo() {
   const url = $("url").value.trim();
   if (!url) { setStatus("Paste a link first.", true); return; }
 
+  resetProgress();
   $("fetchBtn").disabled = true;
   $("fetchBtn").textContent = "...";
   setStatus("Reading video\u2026");
@@ -171,12 +172,11 @@ async function fetchInfo() {
 
     state.duration = data.duration || 0;
     state.qualities = data.qualities;
-    trimMemory = null;   // new video -> forget any remembered trim
+    trimMemory = null;
 
     $("videoTitle").textContent = data.title;
     $("vidStart").textContent = "00:00:00";
     $("vidEnd").textContent = secondsToHms(state.duration);
-
     $("start").value = "00:00:00";
     $("end").value = secondsToHms(state.duration);
 
@@ -204,8 +204,6 @@ function setStatus(msg, isError = false) {
 /* ---------- mode toggle (with 5-min trim memory) ---------- */
 function setMode(mode) {
   const prev = currentMode();
-
-  // Leaving Trim for Full -> remember the current selection + timestamp.
   if (prev === "trim" && mode === "full") {
     trimMemory = { start: $("start").value, end: $("end").value, savedAt: Date.now() };
   }
@@ -216,11 +214,9 @@ function setMode(mode) {
 
   const full = mode === "full";
   if (full) {
-    // Locked full span.
     $("start").value = "00:00:00";
     $("end").value = secondsToHms(state.duration);
   } else if (prev === "full") {
-    // Entering Trim from Full: restore if fresh, else reset to full span.
     const fresh = trimMemory && (Date.now() - trimMemory.savedAt) < TRIM_MEMORY_MS;
     if (fresh) {
       $("start").value = trimMemory.start;
@@ -231,7 +227,6 @@ function setMode(mode) {
       $("end").value = secondsToHms(state.duration);
     }
   }
-  // (Re-clicking the same Trim button leaves in-progress edits untouched.)
 
   $("start").disabled = full;
   $("end").disabled = full;
@@ -239,11 +234,30 @@ function setMode(mode) {
   renderQualities();
 }
 
-/* ---------- streaming download via form POST ---------- */
-function startDownload() {
+/* ---------- progress UI ---------- */
+function showProgress(pct, label) {
+  $("progress").hidden = false;
+  $("progressFill").style.width = Math.max(0, Math.min(100, pct)) + "%";
+  $("progressStage").textContent = label;
+  $("progressPct").textContent = Math.round(pct) + "%";
+}
+function resetProgress() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  $("progress").hidden = true;
+  $("progressFill").style.width = "0%";
+  $("doneMsg").hidden = true;
+}
+
+/* ---------- download (start job -> poll -> save) ---------- */
+async function startDownload() {
   if (!validateTimes()) return;
 
-  const fields = {
+  resetProgress();
+  setStatus("");
+  $("downloadBtn").disabled = true;
+  showProgress(0, "Starting\u2026");
+
+  const body = {
     url: $("url").value.trim(),
     height: $("quality").value,
     mode: currentMode(),
@@ -251,20 +265,54 @@ function startDownload() {
     end: $("end").value,
   };
 
-  const form = document.createElement("form");
-  form.method = "POST";
-  form.action = "/download";
-  form.style.display = "none";
-  for (const [k, v] of Object.entries(fields)) {
-    const input = document.createElement("input");
-    input.name = k;
-    input.value = v;
-    form.appendChild(input);
+  try {
+    const res = await fetch("/download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed.");
+    pollProgress(data.job_id);
+  } catch (e) {
+    resetProgress();
+    setStatus(e.message, true);
+    $("downloadBtn").disabled = false;
   }
-  document.body.appendChild(form);
-  form.submit();
-  form.remove();
-  setStatus("Download started \u2014 the browser will save it as it streams.");
+}
+
+function pollProgress(jobId) {
+  pollTimer = setInterval(async () => {
+    let data;
+    try {
+      const r = await fetch(`/progress/${jobId}`);
+      data = await r.json();
+    } catch { return; }
+
+    if (data.status === "error") {
+      resetProgress();
+      setStatus(data.error || "Download failed.", true);
+      $("downloadBtn").disabled = false;
+      return;
+    }
+
+    const label = data.stage === "encoding" ? "Trimming\u2026"
+      : data.stage === "downloading" ? "Downloading\u2026" : "Working\u2026";
+    showProgress(data.percent || 0, label);
+
+    if (data.status === "done") {
+      clearInterval(pollTimer);
+      pollTimer = null;
+      showProgress(100, "Done");
+      // trigger the browser save via a hidden iframe
+      const frame = document.createElement("iframe");
+      frame.style.display = "none";
+      frame.src = `/file/${jobId}`;
+      document.body.appendChild(frame);
+      $("doneMsg").hidden = false;
+      $("downloadBtn").disabled = false;
+    }
+  }, 400);
 }
 
 /* ---------- wire up ---------- */

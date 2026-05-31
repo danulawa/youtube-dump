@@ -17,7 +17,7 @@ app = Flask(__name__)
 FFMPEG = os.environ.get("FFMPEG_PATH", "ffmpeg")
 
 # trim cuts: False = fast keyframe-aligned copy; True = frame-exact (re-encodes)
-FRAME_EXACT_TRIM = False
+FRAME_EXACT_TRIM = True
 
 # use the (throttled) section download only when a clip is under this fraction
 # of the video; bigger slices download the whole thing fast and trim locally

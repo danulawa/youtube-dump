@@ -2,6 +2,8 @@
 
 A little app that grabs a YouTube video, the whole thing or just a slice, and saves it straight to your browser. It runs on your own computer. Nothing gets uploaded anywhere.
 
+![App Screenshot](assets/Screenshot.heic)
+
 ## What you need first
 
 Three things have to be installed before any of this works:

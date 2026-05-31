@@ -1,4 +1,3 @@
-cat > /mnt/user-data/outputs/ytclip/README.md << 'MDEOF'
 # The YouTube Dump
 
 A tiny local web app that downloads a YouTube video — full or trimmed — at a
@@ -37,7 +36,7 @@ deno --version         # should print version info
 Download or clone the folder so you have this structure:
 
 ```
-ytclip/
+youtube-dump/
 ├── app.py
 ├── requirements.txt
 ├── templates/
@@ -47,7 +46,7 @@ ytclip/
     └── app.js
 ```
 
-Open a terminal **inside the `ytclip` folder** before running anything below.
+Open a terminal **inside the `youtube-dump` folder** before running anything below.
 
 ---
 
@@ -168,7 +167,7 @@ set FFMPEG_PATH=C:\full\path\to\ffmpeg.exe
 
 ## 5. Run it
 
-With your virtual environment **activated** and you in the `ytclip` folder:
+With your virtual environment **activated** and you in the `youtube-dump` folder:
 
 ```bash
 python app.py
@@ -235,52 +234,7 @@ mode automatically so the UI stays responsive during a download.
 MDEOF
 echo "README written"
 echo "--- preview (head) ---"
-head -40 /mnt/user-data/outputs/ytclip/README.md
+head -40 /mnt/user-data/outputs/youtube-dump/README.md
 echo "..."
-wc -l /mnt/user-data/outputs/ytclip/README.md
+wc -l /mnt/user-data/outputs/youtube-dump/README.md
 Output
-
-README written
---- preview (head) ---
-# The YouTube Dump
-
-A tiny local web app that downloads a YouTube video — full or trimmed — at a
-quality you choose, and **streams it straight to your browser without ever
-writing a file on the server**. Built with Flask + yt-dlp + ffmpeg.
-
-> Runs entirely on your own machine. Nothing is uploaded anywhere; downloads
-> use your own internet connection.
-
----
-
-## 1. System requirements
-
-You need **all three** of these before the app will work:
-
-| Requirement | Minimum | Why it's needed |
-|-------------|---------|-----------------|
-| **Python**  | **3.10 or newer** | The code uses modern type-hint syntax (`str \| None`). 3.9 and older will not start. |
-| **ffmpeg**  | any recent build **with libx264** | Trims, merges video+audio, and produces the MP4. A minimal build without libx264 will fail on the *trim* path. |
-| **Deno**    | any recent version | yt-dlp needs a JavaScript runtime to solve YouTube's anti-download challenge. **Without it, downloads crawl at ~70 KB/s.** |
-
-Also: a modern web browser, and an internet connection.
-
-Check what you already have:
-
-```bash
-python --version      # or: python3 --version   -> must be 3.10+
-ffmpeg -version        # should print version info
-deno --version         # should print version info
-```
-
----
-
-## 2. Get the project
-
-Download or clone the folder so you have this structure:
-
-```
-ytclip/
-├── app.py
-...
-233 /mnt/user-data/outputs/ytclip/README.md

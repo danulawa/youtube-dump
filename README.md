@@ -231,10 +231,3 @@ mode automatically so the UI stays responsive during a download.
   bot-flagged by YouTube). Running it on your own machine avoids that entirely.
 - Respect copyright and YouTube's Terms of Service. Download only content you
   own or are permitted to download.
-MDEOF
-echo "README written"
-echo "--- preview (head) ---"
-head -40 /mnt/user-data/outputs/youtube-dump/README.md
-echo "..."
-wc -l /mnt/user-data/outputs/youtube-dump/README.md
-Output

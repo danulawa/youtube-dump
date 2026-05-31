@@ -1,28 +1,3 @@
-#!/usr/bin/env python3
-"""
-ytclip — a minimal Flask app that streams a YouTube video (full or trimmed)
-straight to the browser without ever writing a file to disk.
-
-How "no disk" works:
-    yt-dlp resolves the chosen video + audio stream URLs (and the HTTP headers
-    YouTube requires). ffmpeg reads those streams, trims if requested, merges
-    them, and writes a FRAGMENTED MP4 to its stdout. Flask streams that stdout
-    straight into the HTTP response, so the bytes flow client-ward as they are
-    produced -- nothing is buffered to a file on the server.
-
-    Trimmed clips are re-encoded (libx264/aac) for frame-accurate cut points.
-    Full videos are stream-copied (fast, exact, original codec).
-
-Run:
-    pip install -U flask yt-dlp     # and have ffmpeg available
-    python app.py
-    open http://127.0.0.1:5000
-
-Notes:
-    - Set FFMPEG_PATH to an explicit binary if ffmpeg isn't on PATH
-      (e.g. on a host where you bundle a static build).
-"""
-
 import os
 import re
 import subprocess
@@ -132,7 +107,7 @@ def index():
 
 @app.route("/api/info", methods=["POST"])
 def api_info():
-    """Return title, duration, and available qualities (with full-size bytes)."""
+    
     url = (request.json or {}).get("url", "").strip()
     if not url:
         return jsonify(error="Please paste a YouTube link."), 400
@@ -187,7 +162,7 @@ def api_info():
 
 @app.route("/download", methods=["POST"])
 def download():
-    """Stream the (optionally trimmed) clip as a fragmented MP4. No disk write."""
+    
     url = request.form.get("url", "").strip()
     height = request.form.get("height", "").strip()
     mode = request.form.get("mode", "full")
@@ -279,5 +254,4 @@ def download():
 
 
 if __name__ == "__main__":
-    # threaded=True so info-fetch and a streaming download don't block each other.
     app.run(host="127.0.0.1", port=5000, debug=True, threaded=True)

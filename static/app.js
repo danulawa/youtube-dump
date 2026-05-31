@@ -235,6 +235,11 @@ function setMode(mode) {
 }
 
 /* ---------- progress UI ---------- */
+const STAGE_LABELS = {
+  downloading: "Downloading\u2026",
+  trimming: "Trimming\u2026",
+  finalizing: "Finalizing\u2026",
+};
 function showProgress(pct, label) {
   $("progress").hidden = false;
   $("progressFill").style.width = Math.max(0, Math.min(100, pct)) + "%";
@@ -263,6 +268,7 @@ async function startDownload() {
     mode: currentMode(),
     start: $("start").value,
     end: $("end").value,
+    duration: state.duration,
   };
 
   try {
@@ -296,15 +302,12 @@ function pollProgress(jobId) {
       return;
     }
 
-    const label = data.stage === "encoding" ? "Trimming\u2026"
-      : data.stage === "downloading" ? "Downloading\u2026" : "Working\u2026";
-    showProgress(data.percent || 0, label);
+    showProgress(data.percent || 0, STAGE_LABELS[data.stage] || "Working\u2026");
 
     if (data.status === "done") {
       clearInterval(pollTimer);
       pollTimer = null;
       showProgress(100, "Done");
-      // trigger the browser save via a hidden iframe
       const frame = document.createElement("iframe");
       frame.style.display = "none";
       frame.src = `/file/${jobId}`;

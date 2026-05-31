@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from flask import Flask, Response, render_template, request, jsonify
 from yt_dlp import YoutubeDL
-from yt_dlp.utils import UnsupportedError, download_range_func
+from yt_dlp.utils import UnsupportedError
 
 app = Flask(__name__)
 
@@ -19,9 +19,9 @@ FFMPEG = os.environ.get("FFMPEG_PATH", "ffmpeg")
 # trim cuts: False = fast keyframe-aligned copy; True = frame-exact (re-encodes)
 FRAME_EXACT_TRIM = True
 
-# use the (throttled) section download only when a clip is under this fraction
-# of the video; bigger slices download the whole thing fast and trim locally
-SECTION_MAX_FRACTION = 0.30
+# clip >= this fraction of the video -> full fast download + local trim;
+# smaller clips stream just the section (less data, but YouTube-throttled)
+SECTION_MAX_FRACTION = 0.70
 
 NO_VIDEO_MSG = "Error 404: No Video File Found"
 
@@ -68,6 +68,15 @@ def parse_hms(value):
     return secs
 
 
+def out_time_to_seconds(t):
+    # ffmpeg -progress "HH:MM:SS.micro" -> seconds
+    try:
+        h, m, s = t.split(":")
+        return int(h) * 3600 + int(m) * 60 + float(s)
+    except Exception:
+        return None
+
+
 def safe_filename(name):
     # clean a title into a filename base
     name = re.sub(r"[^\w\s.-]", "", name).strip()
@@ -83,6 +92,11 @@ def content_disposition(base):
         f'attachment; filename="{ascii_base}.mp4"; '
         f"filename*=UTF-8''{quote(f'{base}.mp4')}"
     )
+
+
+def headers_to_ffmpeg(http_headers):
+    # yt-dlp header dict -> ffmpeg -headers string
+    return "".join(f"{k}: {v}\r\n" for k, v in (http_headers or {}).items())
 
 
 def build_qualities(formats):
@@ -147,15 +161,53 @@ def output_path(info, workdir):
     return max(files, key=os.path.getmtime) if files else None
 
 
-def local_trim(src, clip, start, dur):
-    # cut the already-downloaded file (disk read, no throttle -> fast)
-    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-ss", str(start), "-i", src, "-t", str(dur)]
+def run_ffmpeg(cmd, total_dur, job):
+    # run an ffmpeg cmd (with -progress pipe:1) and feed time-based percent into the job
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    for line in proc.stdout:
+        line = line.strip()
+        if line.startswith("out_time=") and total_dur > 0:
+            secs = out_time_to_seconds(line.split("=", 1)[1])
+            if secs is not None:
+                job["percent"] = min(99.0, secs / total_dur * 100)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError((proc.stderr.read() or "")[:400] or "ffmpeg failed")
+
+
+def section_download(inputs, start, dur, out, job):
+    # download ONLY the section via ffmpeg, with smooth time-based progress
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostats"]
+    for f in inputs:
+        hdr = headers_to_ffmpeg(f.get("http_headers"))
+        if hdr:
+            cmd += ["-headers", hdr]
+        cmd += ["-ss", str(start), "-i", f["url"]]
+    if len(inputs) == 2:
+        cmd += ["-map", "0:v:0", "-map", "1:a:0"]
+    cmd += ["-t", str(dur)]
     cmd += (["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"]
             if FRAME_EXACT_TRIM else ["-c", "copy"])
-    cmd += ["-movflags", "+faststart", clip]
-    proc = subprocess.run(cmd, stderr=subprocess.PIPE)
-    if proc.returncode != 0:
-        raise RuntimeError(proc.stderr.decode(errors="replace")[:400] or "ffmpeg trim failed")
+    cmd += ["-progress", "pipe:1", out]
+    run_ffmpeg(cmd, dur, job)
+
+
+def local_trim(src, clip, start, dur, job):
+    # cut the downloaded file (disk read -> fast); no faststart yet
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostats",
+           "-ss", str(start), "-i", src, "-t", str(dur)]
+    cmd += (["-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac"]
+            if FRAME_EXACT_TRIM else ["-c", "copy"])
+    cmd += ["-progress", "pipe:1", clip]
+    run_ffmpeg(cmd, dur, job)
+
+
+def finalize(src, dst, dur, job):
+    # quick remux to put the index up front (streamable / instantly seekable)
+    cmd = [FFMPEG, "-hide_banner", "-loglevel", "error", "-nostats",
+           "-i", src, "-c", "copy", "-movflags", "+faststart",
+           "-progress", "pipe:1", dst]
+    run_ffmpeg(cmd, dur, job)
 
 
 def run_job(job_id, url, fmt, trimming, start, end, duration):
@@ -163,51 +215,63 @@ def run_job(job_id, url, fmt, trimming, start, end, duration):
     workdir = tempfile.mkdtemp(prefix="ytdump_")
     job["workdir"] = workdir
     try:
-        def hook(d):
-            if d.get("status") == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate")
-                if total:
-                    job["stage"] = "downloading"
-                    job["percent"] = min(99.0, (d.get("downloaded_bytes") or 0) / total * 100)
-
-        def pp_hook(d):
-            if d.get("status") == "started":
-                job["stage"] = "encoding"
-
         clip_dur = end - start if trimming else 0
-        # small clip of a long video -> fetch only the section (saves data)
+        # small clip -> stream the section; clip >= 70% -> full download + local trim
         use_section = trimming and (not duration or clip_dur < SECTION_MAX_FRACTION * duration)
 
-        dl = {
-            "format": fmt,
-            "outtmpl": os.path.join(workdir, "out.%(ext)s"),
-            "merge_output_format": "mp4",
-            "concurrent_fragment_downloads": 5,
-            "progress_hooks": [hook],
-            "postprocessor_hooks": [pp_hook],
-        }
         if use_section:
-            dl["download_ranges"] = download_range_func(None, [(start, end)])
-            if FRAME_EXACT_TRIM:
-                dl["force_keyframes_at_cuts"] = True
+            info = extract(url, fmt)  # resolve stream URLs + headers
+            if info.get("entries") is not None or not info.get("formats"):
+                raise RuntimeError(NO_VIDEO_MSG)
+            title = safe_filename(info.get("title", "clip"))
+            inputs = info.get("requested_formats") or [info]
 
-        with YoutubeDL(ydl_opts(dl)) as ydl:
-            info = ydl.extract_info(url, download=True)
+            job["stage"] = "downloading"; job["percent"] = 0.0
+            raw = os.path.join(workdir, "raw.mp4")
+            section_download(inputs, start, clip_dur, raw, job)
 
-        path = output_path(info, workdir)
-        if not path or not os.path.exists(path):
-            raise RuntimeError(NO_VIDEO_MSG)
+            job["stage"] = "finalizing"; job["percent"] = 0.0
+            final_path = os.path.join(workdir, "final.mp4")
+            finalize(raw, final_path, clip_dur, job)
+            base = f"{title}_{start}-{end}"
+        else:
+            def hook(d):
+                if d.get("status") == "downloading":
+                    total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                    if total:
+                        job["stage"] = "downloading"
+                        job["percent"] = min(99.0, (d.get("downloaded_bytes") or 0) / total * 100)
 
-        # full download of a trim -> cut locally (fast, no throttle)
-        if trimming and not use_section:
-            job["stage"] = "encoding"
-            clip = os.path.join(workdir, "clip.mp4")
-            local_trim(path, clip, start, clip_dur)
-            path = clip
+            dl = {
+                "format": fmt,
+                "outtmpl": os.path.join(workdir, "out.%(ext)s"),
+                "merge_output_format": "mp4",
+                "concurrent_fragment_downloads": 5,
+                "progress_hooks": [hook],
+            }
+            job["stage"] = "downloading"; job["percent"] = 0.0
+            with YoutubeDL(ydl_opts(dl)) as ydl:
+                info = ydl.extract_info(url, download=True)
 
-        title = safe_filename(info.get("title", "clip"))
-        job["base"] = f"{title}_{start}-{end}" if trimming else title
-        job["path"] = path
+            src = output_path(info, workdir)
+            if not src or not os.path.exists(src):
+                raise RuntimeError(NO_VIDEO_MSG)
+            title = safe_filename(info.get("title", "clip"))
+
+            if not trimming:
+                final_path = src
+                base = title
+            else:
+                job["stage"] = "trimming"; job["percent"] = 0.0
+                clip = os.path.join(workdir, "clip.mp4")
+                local_trim(src, clip, start, clip_dur, job)
+                job["stage"] = "finalizing"; job["percent"] = 0.0
+                final_path = os.path.join(workdir, "final.mp4")
+                finalize(clip, final_path, clip_dur, job)
+                base = f"{title}_{start}-{end}"
+
+        job["base"] = base
+        job["path"] = final_path
         job["percent"] = 100.0
         job["stage"] = "done"
         job["status"] = "done"
